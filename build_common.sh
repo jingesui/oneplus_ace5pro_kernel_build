@@ -71,6 +71,24 @@ do_build() {
     clone_if_missing "$MSM_REPO"     "$PLATFORM_DIR/msm-kernel"  "$BRANCH"
     clone_if_missing "$MODULES_REPO" "$MODULES_DIR"              "$BRANCH"
 
+    # ── Apply Fengchi scheduler patch ────────────────────────
+    local PATCH_FILE="$SCRIPT_DIR/fengchi_oneplus_ace5_pro_b.patch"
+    if [[ -f "$PATCH_FILE" ]]; then
+        log "Applying Fengchi scheduler patch..."
+        cd "$KERNEL_DIR" || die "Cannot enter kernel source dir"
+        if patch --dry-run -p1 < "$PATCH_FILE" &>/dev/null; then
+            patch -p1 < "$PATCH_FILE"
+            log "✓ Patch applied successfully"
+        else
+            warn "Patch may already be applied or has conflicts; attempting --forward force"
+            patch -p1 --forward --no-backup-if-mismatch < "$PATCH_FILE" || \
+                warn "Patch failed (possibly already applied, continuing)"
+        fi
+        cd - > /dev/null
+    else
+        warn "Fengchi patch not found at $PATCH_FILE, skipping"
+    fi
+
     # ── Toolchain ─────────────────────────────────────────────
     local AOSP_CLANG="$HOME/aosp-clang-r510928/bin"
     local PAHOLE_CMD="pahole"
@@ -113,6 +131,26 @@ do_build() {
     sed -i '/CONFIG_UNUSED_KSYMS_WHITELIST/d'                                      "$OUT_DIR/.config"
     sed -i 's/CONFIG_MODULE_SIG_PROTECT=y/# CONFIG_MODULE_SIG_PROTECT is not set/' "$OUT_DIR/.config"
     sed -i 's/CONFIG_MODULE_SCMVERSION=y/# CONFIG_MODULE_SCMVERSION is not set/'   "$OUT_DIR/.config"
+
+    # ── Append DroidSpaces required configs ──────────────────
+    log "Appending DroidSpaces kernel configs..."
+    cat >> "$OUT_DIR/.config" << 'EOF'
+CONFIG_SYSVIPC=y
+CONFIG_POSIX_MQUEUE=y
+CONFIG_IPC_NS=y
+CONFIG_PID_NS=y
+CONFIG_DEVTMPFS=y
+CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+CONFIG_NETFILTER_XT_TARGET_REJECT=y
+CONFIG_NETFILTER_XT_TARGET_LOG=y
+CONFIG_NETFILTER_XT_MATCH_RECENT=y
+CONFIG_IP_SET=y
+CONFIG_IP_SET_HASH_IP=y
+CONFIG_IP_SET_HASH_NET=y
+CONFIG_NETFILTER_XT_SET=y
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_TMPFS_XATTR=y
+EOF
 
     make -j"$JOBS" LLVM=1 ARCH=arm64 CC=clang LD=ld.lld HOSTLD=ld.lld \
         PAHOLE="$PAHOLE_CMD" O=out -C "$KERNEL_DIR" olddefconfig
