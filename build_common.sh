@@ -89,44 +89,31 @@ do_build() {
     clone_if_missing "$MSM_REPO"     "$PLATFORM_DIR/msm-kernel"  "$BRANCH"
     clone_if_missing "$MODULES_REPO" "$MODULES_DIR"              "$BRANCH"
 
-    # ⚠️ 暂不删除 .git，先用 git apply 打补丁以保证新文件正确创建
-    # ── Download & Apply Fengchi scheduler patch ─────────────
-    local PATCH_URL="https://raw.githubusercontent.com/Numbersf/SCHED_PATCH/sm8750/fengchi_oneplus_ace5_pro_b.patch"
-    local PATCH_FILE="/tmp/fengchi_oneplus_ace5_pro_b.patch"
-    log "Downloading Fengchi patch..."
-    if curl -sL "$PATCH_URL" -o "$PATCH_FILE"; then
+    # ── Clone Fengchi patch repo & apply ─────────────────────
+    local PATCH_REPO_URL="https://github.com/Numbersf/SCHED_PATCH"
+    local PATCH_REPO_DIR="$WORKSPACE/fengchi_patch_repo"
+    local PATCH_BRANCH="sm8750"
+    clone_if_missing "$PATCH_REPO_URL" "$PATCH_REPO_DIR" "$PATCH_BRANCH"
+
+    local PATCH_FILE="$PATCH_REPO_DIR/fengchi_oneplus_ace5_pro_b.patch"
+    if [[ -f "$PATCH_FILE" ]]; then
+        log "Applying Fengchi scheduler patch..."
         cd "$KERNEL_DIR" || die "Cannot enter kernel source dir"
-        # 优先使用 git apply（能正确创建新文件）
         if git apply --check "$PATCH_FILE" &>/dev/null; then
             git apply "$PATCH_FILE"
-            log "✓ Patch applied with git apply"
+            log "✓ Patch applied successfully"
         else
             warn "git apply failed, trying standard patch..."
             if patch --dry-run -p1 < "$PATCH_FILE" &>/dev/null; then
                 patch -p1 < "$PATCH_FILE"
                 log "✓ Patch applied with patch"
             else
-                warn "Dry-run failed, forcing patch..."
-                patch -p1 --forward --no-backup-if-mismatch < "$PATCH_FILE" || \
-                    warn "Patch forced, some hunks may have failed"
-            fi
-        fi
-
-        # 补丁可能未包含新增的头文件，从同一仓库下载缺失的 hmbird.h
-        local HMBIRD_HEADER="include/linux/sched/hmbird.h"
-        if [[ ! -f "$HMBIRD_HEADER" ]]; then
-            warn "Missing $HMBIRD_HEADER, downloading from SCHED_PATCH repo..."
-            mkdir -p "$(dirname "$HMBIRD_HEADER")"
-            if curl -sL "https://raw.githubusercontent.com/Numbersf/SCHED_PATCH/sm8750/$HMBIRD_HEADER" -o "$HMBIRD_HEADER"; then
-                log "✓ Downloaded $HMBIRD_HEADER"
-            else
-                die "Cannot obtain hmbird.h, the patch is incomplete"
+                warn "Patch cannot be applied cleanly, skipping Fengchi patch"
             fi
         fi
         cd - > /dev/null
-        rm -f "$PATCH_FILE"
     else
-        warn "Failed to download Fengchi patch, skipping"
+        warn "Patch file not found in cloned repo, skipping Fengchi"
     fi
 
     # ── 现在安全删除 .git，阻止版本号追加 git 后缀 ────────
