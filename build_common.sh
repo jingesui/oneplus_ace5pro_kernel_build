@@ -89,6 +89,12 @@ do_build() {
     clone_if_missing "$MSM_REPO"     "$PLATFORM_DIR/msm-kernel"  "$BRANCH"
     clone_if_missing "$MODULES_REPO" "$MODULES_DIR"              "$BRANCH"
 
+    # ── 彻底禁止 git 版本检测：删除内核源码树中的 .git ─────
+    if [[ -d "$KERNEL_DIR/.git" ]]; then
+        log "Removing .git to prevent auto localversion suffix..."
+        rm -rf "$KERNEL_DIR/.git"
+    fi
+
     # ── Download & Apply Fengchi scheduler patch ─────────────
     local PATCH_URL="https://raw.githubusercontent.com/Numbersf/SCHED_PATCH/sm8750/fengchi_oneplus_ace5_pro_b.patch"
     local PATCH_FILE="/tmp/fengchi_oneplus_ace5_pro_b.patch"
@@ -108,9 +114,6 @@ do_build() {
     else
         warn "Failed to download Fengchi patch, skipping"
     fi
-
-    # 禁止内核自动追加 git commit 后缀（避免版本号超 64 字符）
-    touch "$KERNEL_DIR/.scmversion"
 
     # ── Toolchain ─────────────────────────────────────────────
     local AOSP_CLANG="$HOME/aosp-clang-r510928/bin"
@@ -147,13 +150,17 @@ do_build() {
     mkdir -p "$OUT_DIR"
     cp "$DEFCONFIG" "$OUT_DIR/.config"
 
-    # Patch config
-    sed -i 's/CONFIG_LOCALVERSION_AUTO=y/# CONFIG_LOCALVERSION_AUTO is not set/' "$OUT_DIR/.config"
-    sed -i "s|CONFIG_LOCALVERSION=.*|CONFIG_LOCALVERSION=\"$LOCALVERSION\"|"      "$OUT_DIR/.config"
-    sed -i 's/CONFIG_TRIM_UNUSED_KSYMS=y/# CONFIG_TRIM_UNUSED_KSYMS is not set/' "$OUT_DIR/.config"
-    sed -i '/CONFIG_UNUSED_KSYMS_WHITELIST/d'                                      "$OUT_DIR/.config"
-    sed -i 's/CONFIG_MODULE_SIG_PROTECT=y/# CONFIG_MODULE_SIG_PROTECT is not set/' "$OUT_DIR/.config"
-    sed -i 's/CONFIG_MODULE_SCMVERSION=y/# CONFIG_MODULE_SCMVERSION is not set/'   "$OUT_DIR/.config"
+    # Patch config using scripts/config (more reliable than sed)
+    cd "$KERNEL_DIR" || die
+    scripts/config --file "$OUT_DIR/.config" --set-str CONFIG_LOCALVERSION "$LOCALVERSION"
+    scripts/config --file "$OUT_DIR/.config" --disable CONFIG_LOCALVERSION_AUTO
+    scripts/config --file "$OUT_DIR/.config" --disable CONFIG_TRIM_UNUSED_KSYMS
+    scripts/config --file "$OUT_DIR/.config" --disable CONFIG_MODULE_SIG_PROTECT
+    scripts/config --file "$OUT_DIR/.config" --disable CONFIG_MODULE_SCMVERSION
+    cd - > /dev/null
+
+    # Remove any stale UNUSED_KSYMS_WHITELIST entries
+    sed -i '/CONFIG_UNUSED_KSYMS_WHITELIST/d' "$OUT_DIR/.config"
 
     # ── Append DroidSpaces required configs ──────────────────
     log "Appending DroidSpaces kernel configs..."
