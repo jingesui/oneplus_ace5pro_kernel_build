@@ -32,7 +32,8 @@ clone_if_missing() {
 }
 
 do_build() {
-    local JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+    # ── 单核编译，防止 OOM ──────────────────────────────────
+    local JOBS=1
     local ARCH=$(uname -m)
 
     log "=== OnePlus Ace 5 Pro Kernel Build ==="
@@ -63,6 +64,23 @@ do_build() {
         else
             die "Missing: ${MISSING[*]}. Install manually."
         fi
+    fi
+
+    # ── 8 GB Swap 防 OOM（独立命名，避免冲突） ──────────────
+    local SWAPFILE="/swapfile_kbuild"
+    if ! swapon --show | grep -q "$SWAPFILE"; then
+        log "Creating 8 GB swap at $SWAPFILE..."
+        local SUDO=""
+        [[ $(id -u) -ne 0 ]] && SUDO="sudo"
+        if [[ ! -f "$SWAPFILE" ]]; then
+            $SUDO fallocate -l 8G "$SWAPFILE" || $SUDO dd if=/dev/zero of="$SWAPFILE" bs=1M count=8192
+            $SUDO chmod 600 "$SWAPFILE"
+        fi
+        $SUDO mkswap "$SWAPFILE" >/dev/null
+        $SUDO swapon "$SWAPFILE"
+        log "✓ Swap enabled ($SWAPFILE)"
+    else
+        log "Swap already active at $SWAPFILE, skipping"
     fi
 
     # ── Clone sources ─────────────────────────────────────────
