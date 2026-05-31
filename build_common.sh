@@ -89,30 +89,50 @@ do_build() {
     clone_if_missing "$MSM_REPO"     "$PLATFORM_DIR/msm-kernel"  "$BRANCH"
     clone_if_missing "$MODULES_REPO" "$MODULES_DIR"              "$BRANCH"
 
-    # ── 彻底禁止 git 版本检测：删除内核源码树中的 .git ─────
-    if [[ -d "$KERNEL_DIR/.git" ]]; then
-        log "Removing .git to prevent auto localversion suffix..."
-        rm -rf "$KERNEL_DIR/.git"
-    fi
-
+    # ⚠️ 暂不删除 .git，先用 git apply 打补丁以保证新文件正确创建
     # ── Download & Apply Fengchi scheduler patch ─────────────
     local PATCH_URL="https://raw.githubusercontent.com/Numbersf/SCHED_PATCH/sm8750/fengchi_oneplus_ace5_pro_b.patch"
     local PATCH_FILE="/tmp/fengchi_oneplus_ace5_pro_b.patch"
     log "Downloading Fengchi patch..."
     if curl -sL "$PATCH_URL" -o "$PATCH_FILE"; then
         cd "$KERNEL_DIR" || die "Cannot enter kernel source dir"
-        if patch --dry-run -p1 < "$PATCH_FILE" &>/dev/null; then
-            patch -p1 < "$PATCH_FILE"
-            log "✓ Patch applied successfully"
+        # 优先使用 git apply（能正确创建新文件）
+        if git apply --check "$PATCH_FILE" &>/dev/null; then
+            git apply "$PATCH_FILE"
+            log "✓ Patch applied with git apply"
         else
-            warn "Patch may already be applied or has conflicts; attempting --forward force"
-            patch -p1 --forward --no-backup-if-mismatch < "$PATCH_FILE" || \
-                warn "Patch failed (possibly already applied, continuing)"
+            warn "git apply failed, trying standard patch..."
+            if patch --dry-run -p1 < "$PATCH_FILE" &>/dev/null; then
+                patch -p1 < "$PATCH_FILE"
+                log "✓ Patch applied with patch"
+            else
+                warn "Dry-run failed, forcing patch..."
+                patch -p1 --forward --no-backup-if-mismatch < "$PATCH_FILE" || \
+                    warn "Patch forced, some hunks may have failed"
+            fi
+        fi
+
+        # 补丁可能未包含新增的头文件，从同一仓库下载缺失的 hmbird.h
+        local HMBIRD_HEADER="include/linux/sched/hmbird.h"
+        if [[ ! -f "$HMBIRD_HEADER" ]]; then
+            warn "Missing $HMBIRD_HEADER, downloading from SCHED_PATCH repo..."
+            mkdir -p "$(dirname "$HMBIRD_HEADER")"
+            if curl -sL "https://raw.githubusercontent.com/Numbersf/SCHED_PATCH/sm8750/$HMBIRD_HEADER" -o "$HMBIRD_HEADER"; then
+                log "✓ Downloaded $HMBIRD_HEADER"
+            else
+                die "Cannot obtain hmbird.h, the patch is incomplete"
+            fi
         fi
         cd - > /dev/null
         rm -f "$PATCH_FILE"
     else
         warn "Failed to download Fengchi patch, skipping"
+    fi
+
+    # ── 现在安全删除 .git，阻止版本号追加 git 后缀 ────────
+    if [[ -d "$KERNEL_DIR/.git" ]]; then
+        log "Removing .git to prevent auto localversion suffix..."
+        rm -rf "$KERNEL_DIR/.git"
     fi
 
     # ── Toolchain ─────────────────────────────────────────────
@@ -150,7 +170,7 @@ do_build() {
     mkdir -p "$OUT_DIR"
     cp "$DEFCONFIG" "$OUT_DIR/.config"
 
-    # Patch config using scripts/config (more reliable than sed)
+    # 使用 scripts/config 可靠地设置版本和禁用不需要的特性
     cd "$KERNEL_DIR" || die
     scripts/config --file "$OUT_DIR/.config" --set-str CONFIG_LOCALVERSION "$LOCALVERSION"
     scripts/config --file "$OUT_DIR/.config" --disable CONFIG_LOCALVERSION_AUTO
@@ -159,7 +179,7 @@ do_build() {
     scripts/config --file "$OUT_DIR/.config" --disable CONFIG_MODULE_SCMVERSION
     cd - > /dev/null
 
-    # Remove any stale UNUSED_KSYMS_WHITELIST entries
+    # 清理可能残留的 UNUSED_KSYMS_WHITELIST 条目
     sed -i '/CONFIG_UNUSED_KSYMS_WHITELIST/d' "$OUT_DIR/.config"
 
     # ── Append DroidSpaces required configs ──────────────────
