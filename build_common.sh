@@ -89,10 +89,11 @@ do_build() {
     clone_if_missing "$MSM_REPO"     "$PLATFORM_DIR/msm-kernel"  "$BRANCH"
     clone_if_missing "$MODULES_REPO" "$MODULES_DIR"              "$BRANCH"
 
-    # ── Apply Fengchi scheduler patch ────────────────────────
-    local PATCH_FILE="$SCRIPT_DIR/fengchi_oneplus_ace5_pro_b.patch"
-    if [[ -f "$PATCH_FILE" ]]; then
-        log "Applying Fengchi scheduler patch..."
+    # ── Download & Apply Fengchi scheduler patch ─────────────
+    local PATCH_URL="https://raw.githubusercontent.com/Numbersf/SCHED_PATCH/sm8750/fengchi_oneplus_ace5_pro_b.patch"
+    local PATCH_FILE="/tmp/fengchi_oneplus_ace5_pro_b.patch"
+    log "Downloading Fengchi patch..."
+    if curl -sL "$PATCH_URL" -o "$PATCH_FILE"; then
         cd "$KERNEL_DIR" || die "Cannot enter kernel source dir"
         if patch --dry-run -p1 < "$PATCH_FILE" &>/dev/null; then
             patch -p1 < "$PATCH_FILE"
@@ -103,9 +104,13 @@ do_build() {
                 warn "Patch failed (possibly already applied, continuing)"
         fi
         cd - > /dev/null
+        rm -f "$PATCH_FILE"
     else
-        warn "Fengchi patch not found at $PATCH_FILE, skipping"
+        warn "Failed to download Fengchi patch, skipping"
     fi
+
+    # 禁止内核自动追加 git commit 后缀（避免版本号超 64 字符）
+    touch "$KERNEL_DIR/.scmversion"
 
     # ── Toolchain ─────────────────────────────────────────────
     local AOSP_CLANG="$HOME/aosp-clang-r510928/bin"
